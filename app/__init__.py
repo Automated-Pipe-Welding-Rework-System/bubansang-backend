@@ -11,11 +11,15 @@ def create_app():
 
     # Blueprint 등록
     from .routes.health_routes import health_bp
-    #from .routes.defect_routes import defect_bp
-    #from .routes.schedule_routes import schedule_bp
+    from .routes.defect_routes import defect_bp
+    from .routes.welder_routes import welder_bp
+    from .routes.master_routes import master_bp
+    from .routes.schedule_routes import schedule_bp
 
     app.register_blueprint(health_bp)
-    #app.register_blueprint(defect_bp, url_prefix="/api/defects")
-    #app.register_blueprint(schedule_bp, url_prefix="/api/schedule")
+    app.register_blueprint(defect_bp)
+    app.register_blueprint(welder_bp)
+    app.register_blueprint(master_bp)
+    app.register_blueprint(schedule_bp)
 
     return app

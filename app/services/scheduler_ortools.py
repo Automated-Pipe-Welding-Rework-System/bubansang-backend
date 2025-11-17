@@ -330,7 +330,7 @@ class ORToolsScheduler:
         batch = ScheduleBatch(
             target_date=datetime.strptime(target_date, '%Y-%m-%d').date(),
             target_session=target_session,
-            status='confirmed'
+            status='draft'
         )
         db.session.add(batch)
         db.session.flush()

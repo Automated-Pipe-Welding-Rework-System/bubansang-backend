@@ -81,3 +81,43 @@ def update_defect(defect_id):
         'message': 'Defect updated successfully'
     }), 200
 
+
+@defect_bp.route('/batch-priority', methods=['PATCH'])
+def batch_update_priority():
+    data = request.json
+    
+    if not data or 'priorities' not in data:
+        return jsonify({'error': 'priorities array is required'}), 400
+    
+    priorities = data['priorities']
+    
+    updated_count = 0
+    errors = []
+    
+    for item in priorities:
+        defect_id = item.get('defect_id')
+        priority_factor = item.get('priority_factor')
+        
+        if not defect_id or priority_factor is None:
+            errors.append(f"Invalid item: {item}")
+            continue
+        
+        if not isinstance(priority_factor, int) or priority_factor < 1 or priority_factor > 10:
+            errors.append(f"Invalid priority_factor for defect {defect_id}: {priority_factor}")
+            continue
+        
+        defect = Defect.query.get(defect_id)
+        if not defect:
+            errors.append(f"Defect {defect_id} not found")
+            continue
+        
+        defect.priority_factor = priority_factor
+        updated_count += 1
+    
+    db.session.commit()
+    
+    return jsonify({
+        'message': f'Updated {updated_count} defects',
+        'updated_count': updated_count,
+        'errors': errors if errors else None
+    }), 200

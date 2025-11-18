@@ -1,3 +1,5 @@
+import math
+
 # 결함 타입! 7개만
 DEFECT_TYPES = {
     0: '균열',
@@ -16,14 +18,14 @@ CRITICAL_DEFECT_TYPES = [0, 1, 2]
 #심각도 점수 계산 공식
 ## 무관용 결함이면 무조건 심각도 -> 1.0
 ## MVP에서는 p_in과 p_out중 큰 값
-## priority_factor는 기본 1, 심각도가 0-1이므로 음수로 적용!
+## priority_factor는 기본 1, 곱셈으로 적용하여 우선순위 반영
 def calculate_severity_score(defect):
     if defect.defect_type in CRITICAL_DEFECT_TYPES:
         severity = 1.0
     else:
         severity = max(defect.p_in, defect.p_out)
     
-    severity_score = severity ** (-defect.priority_factor)
+    severity_score = math.sqrt((severity * 10) ** defect.priority_factor)
     
     return severity_score
 

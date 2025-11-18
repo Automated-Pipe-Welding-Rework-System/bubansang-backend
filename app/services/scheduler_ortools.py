@@ -10,8 +10,9 @@
 TODO : 필요시 가중치 변경!
 목적함수:
   Maximize: Σ severity_score - λ * Σ travel_time - μ * Σ setup_time
-  - λ = 0.1 (이동 1분 = 심각도 0.1)
-  - μ = 0.2 (셋업 1분 = 심각도 0.2)
+  
+  심각도: severity * 100 (범위: 50~1000)
+  가중치: 1,2
 """
 
 from datetime import datetime, timedelta
@@ -31,8 +32,8 @@ class ORToolsScheduler:
             'night': (19, 22)
         }
         
-        self.setup_location_id = 4  # 구역 D에서 셋업
-        self.concurrent_restricted_locations = [(6, 7), (7, 6)]  # 구역 F,G는 동시 작업 불가능!
+        self.setup_location_id = 4
+        self.concurrent_restricted_locations = [(6, 7), (7, 6)]
     
     def get_travel_time(self, from_location_id, to_location_id):
         if from_location_id == to_location_id:
@@ -74,7 +75,6 @@ class ORToolsScheduler:
         
         for welder in welders:
             if welder.status == 'working' and welder.current_defect_id:
-                # wroking일 때 현재 진행중인 재작업이 언제 끝날지 -> 그 이후부터 스케쥴링
                 current_defect = Defect.query.get(welder.current_defect_id)
                 if current_defect:
                     estimated_end = session_start + timedelta(minutes=current_defect.rework_time)
@@ -91,7 +91,6 @@ class ORToolsScheduler:
                     welder_start_location[welder.welder_id] = 1 # 구역 A
                     welder_start_setup[welder.welder_id] = welder.current_setup_id or 4
             else:
-                # available -> 무조건 구역 A에서 
                 welder_start_time[welder.welder_id] = 0
                 welder_start_location[welder.welder_id] = 1
                 welder_start_setup[welder.welder_id] = welder.current_setup_id or 4
@@ -156,28 +155,51 @@ class ORToolsScheduler:
                 start_var, end_var, _, is_assigned_var = task_vars[welder.welder_id][defect_id]
                 model.Add(end_var <= welder_horizon).OnlyEnforceIf(is_assigned_var)
             
-            #첫 작업 A에서 이동시간 고려 or working일 경우
             start_loc = welder_start_location[welder.welder_id]
             start_setup = welder_start_setup[welder.welder_id]
             earliest_start = welder_start_time[welder.welder_id]
+        
+            first_task_vars = {}
+            for defect_id in task_vars[welder.welder_id]:
+                is_first = model.NewBoolVar(f'first_w{welder.welder_id}_d{defect_id}')
+                first_task_vars[defect_id] = is_first
+            
+            for defect_id in task_vars[welder.welder_id]:
+                _, _, _, is_assigned_var = task_vars[welder.welder_id][defect_id]
+                is_first = first_task_vars[defect_id]
+                model.Add(is_first == 0).OnlyEnforceIf(is_assigned_var.Not())
+            
+            model.Add(sum(first_task_vars.values()) <= 1)
+            
+            assigned_vars = [task_vars[welder.welder_id][d][3] for d in task_vars[welder.welder_id]]
+            has_any_task = model.NewBoolVar(f'has_task_w{welder.welder_id}')
+            model.Add(sum(assigned_vars) >= 1).OnlyEnforceIf(has_any_task)
+            model.Add(sum(assigned_vars) == 0).OnlyEnforceIf(has_any_task.Not())
+            model.Add(sum(first_task_vars.values()) == 1).OnlyEnforceIf(has_any_task)
             
             for defect_id in task_vars[welder.welder_id]:
                 start_var, _, _, is_assigned_var = task_vars[welder.welder_id][defect_id]
+                is_first = first_task_vars[defect_id]
+                
+                for other_defect_id in task_vars[welder.welder_id]:
+                    if other_defect_id != defect_id:
+                        other_start, _, _, other_assigned = task_vars[welder.welder_id][other_defect_id]
+                        model.Add(start_var <= other_start).OnlyEnforceIf([is_first, other_assigned])
+            
+            for defect_id in task_vars[welder.welder_id]:
+                start_var, _, _, is_assigned_var = task_vars[welder.welder_id][defect_id]
+                is_first = first_task_vars[defect_id]
                 
                 defect_loc = defect_locations[defect_id]
                 defect_setup = defect_setups[defect_id]
                 
-                if start_setup != defect_setup:
-                    #셋업 변경이 필요한 경우 D구역에서 셋업 변경 하고 화야함.
-                    travel_to_d = self.get_travel_time(start_loc, self.setup_location_id)
-                    setup_time = self.get_setup_time(defect_setup)
-                    travel_to_work = self.get_travel_time(self.setup_location_id, defect_loc)
-                    min_start_time = earliest_start + travel_to_d + setup_time + travel_to_work
-                else:
-                    travel_time = self.get_travel_time(start_loc, defect_loc)
-                    min_start_time = earliest_start + travel_time
+                # 무조건 A구역 → D구역(장비 셋업) → 작업 위치
+                travel_to_d = self.get_travel_time(start_loc, self.setup_location_id)
+                setup_time = self.get_setup_time(defect_setup)
+                travel_to_work = self.get_travel_time(self.setup_location_id, defect_loc)
+                min_start_time = earliest_start + travel_to_d + setup_time + travel_to_work
                 
-                model.Add(start_var >= min_start_time).OnlyEnforceIf(is_assigned_var)
+                model.Add(start_var >= min_start_time).OnlyEnforceIf(is_first)
         
         #4. 작업 순서, 이동, 셋업 비용
         travel_cost_vars = {}  # [welder_id][(d1, d2)] -> IntVar
@@ -211,7 +233,6 @@ class ORToolsScheduler:
                     # 작업1이 작업2보다 먼저 끝나는 경우
                     model.Add(end_1 < start_2).OnlyEnforceIf([both_assigned, task1_before_task2])
                     
-                    # 이동 시간 계산
                     loc_1 = defect_locations[defect_id_1]
                     loc_2 = defect_locations[defect_id_2]
                     setup_1 = defect_setups[defect_id_1]
@@ -243,7 +264,7 @@ class ORToolsScheduler:
                         travel_time_12 = total_overhead
                         setup_time_12 = 0
                     
-                    #시간적으로 뒤에 와야함 > 작업2 시작 >= 작업1 종료 + overhead
+                    #시간적으로 뒤에 와야함 > 작업2 시작 >= 작업1 종료 + overhead!!!!!
                     model.Add(start_2 >= end_1 + total_overhead).OnlyEnforceIf([both_assigned, task1_before_task2])
                     
                     #비용 계산 (작업1 -> 작업2 순서일 때만)
@@ -272,7 +293,7 @@ class ORToolsScheduler:
                     
                     model.Add(start_1 >= end_2 + total_overhead_rev).OnlyEnforceIf([both_assigned, task1_before_task2.Not()])
         
-        #5. F,G구역 동시 작업X
+        #5. F,G구역 동시 작업X -> 인데 뭔가 이상한데
         for t in range(horizon):
             working_at_f = []
             working_at_g = []
@@ -306,13 +327,13 @@ class ORToolsScheduler:
                         severity * is_assigned[(welder.welder_id, defect.defect_id)]
                     )
         
-        lambda_weight = 10
+        lambda_weight = 1  #이동 가중치
         
         for welder_id in travel_cost_vars:
             for (d1, d2), travel_var in travel_cost_vars[welder_id].items():
                 objective_terms.append(-lambda_weight * travel_var)
         
-        mu_weight = 20
+        mu_weight = 2  #셋업 가중치
         
         for welder_id in setup_cost_vars:
             for (d1, d2), setup_var in setup_cost_vars[welder_id].items():

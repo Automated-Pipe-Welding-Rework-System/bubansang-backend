@@ -121,9 +121,10 @@ def get_schedule(batch_id):
 
 @schedule_bp.route('/query', methods=['GET'])
 def query_schedule():
-    """특정 날짜/세션의 확정된 스케줄 조회"""
+    """특정 날짜/세션의 스케줄 조회 (status 옵션: confirmed, draft, any)"""
     target_date = request.args.get('target_date')
     target_session = request.args.get('target_session')
+    status_filter = request.args.get('status', 'any')  # 기본값: any (모든 상태)
     
     if not target_date or not target_session:
         return jsonify({'error': 'target_date and target_session are required'}), 400
@@ -131,18 +132,29 @@ def query_schedule():
     if target_session not in ['morning', 'afternoon', 'night']:
         return jsonify({'error': 'target_session must be morning, afternoon, or night'}), 400
     
-    # 해당 날짜/세션의 확정된 스케줄 찾기 (가장 최근 것)
+    if status_filter not in ['confirmed', 'draft', 'any']:
+        return jsonify({'error': 'status must be confirmed, draft, or any'}), 400
+    
+    # 해당 날짜/세션의 스케줄 찾기 (가장 최근 것)
     from datetime import datetime
     target_date_obj = datetime.strptime(target_date, '%Y-%m-%d').date()
     
-    batch = ScheduleBatch.query.filter_by(
+    query = ScheduleBatch.query.filter_by(
         target_date=target_date_obj,
-        target_session=target_session,
-        status='confirmed'
-    ).order_by(ScheduleBatch.created_at.desc()).first()
+        target_session=target_session
+    )
+    
+    # status 필터 적용
+    if status_filter == 'confirmed':
+        query = query.filter_by(status='confirmed')
+    elif status_filter == 'draft':
+        query = query.filter_by(status='draft')
+    # 'any'는 필터 없음
+    
+    batch = query.order_by(ScheduleBatch.created_at.desc()).first()
     
     if not batch:
-        return jsonify({'message': 'No confirmed schedule found for this date and session'}), 404
+        return jsonify({'message': f'No {status_filter if status_filter != "any" else ""} schedule found for this date and session'.strip()}), 404
     
     return get_schedule_response(batch.batch_id)
 
